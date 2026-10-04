@@ -1,50 +1,103 @@
 import crypto from 'node:crypto';
 
 export const COOKIE_NAME = 'sftp_proxy_session';
+export const ROLES = ['viewer', 'admin'];
 
 function digest(value) {
   return crypto.createHash('sha256').update(String(value)).digest();
 }
 
-/**
- * One shared password, no users. A session is just a signed expiry time:
- * `<expiresAtMs>.<hmac>`. There is nothing stored server-side to look up, so
- * the container keeps no state and survives a restart (given SESSION_SECRET).
- *
- * The signing key mixes in the site password, so changing SITE_PASSWORD signs
- * every existing session out.
- */
-export function createAuth({ password, sessionSecret, sessionMaxAgeMs, now = Date.now }) {
-  const secret = sessionSecret || crypto.randomBytes(32).toString('hex');
-  const key = crypto.createHmac('sha256', secret).update(password).digest();
-  const expected = digest(password);
+function sameBytes(a, b) {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
 
-  const sign = (payload) => crypto.createHmac('sha256', key).update(payload).digest('base64url');
+/**
+ * Two shared passwords, no users: the download password makes a `viewer`
+ * session, the optional admin password an `admin` one. A session is just a
+ * signed `<role>.<expiresAtMs>`; nothing is stored server-side, so the
+ * container keeps no state and survives a restart (given SESSION_SECRET).
+ *
+ * Each role signs with a key that mixes in its own password, so changing one
+ * password signs out exactly the sessions it created.
+ */
+export function createAuth({
+  password, adminPassword = '', sessionSecret, sessionMaxAgeMs, adminSessionMaxAgeMs,
+  now = Date.now,
+}) {
+  const secret = sessionSecret || crypto.randomBytes(32).toString('hex');
+  const roles = {
+    viewer: {
+      expected: digest(password),
+      key: crypto.createHmac('sha256', secret).update(`viewer\0${password}`).digest(),
+      maxAgeMs: sessionMaxAgeMs,
+    },
+    ...(adminPassword ? {
+      admin: {
+        expected: digest(adminPassword),
+        key: crypto.createHmac('sha256', secret).update(`admin\0${adminPassword}`).digest(),
+        maxAgeMs: adminSessionMaxAgeMs ?? sessionMaxAgeMs,
+      },
+    } : {}),
+  };
+
+  const sign = (role, payload) =>
+    crypto.createHmac('sha256', roles[role].key).update(payload).digest('base64url');
+
+  function verify(token) {
+    if (typeof token !== 'string') return null;
+    const [role, expires, sig, extra] = token.split('.');
+    if (extra !== undefined || !roles[role] || !expires || !sig) return null;
+    if (!sameBytes(sig, sign(role, `${role}.${expires}`))) return null;
+    const expiresAt = Number(expires);
+    return Number.isFinite(expiresAt) && expiresAt > now() ? role : null;
+  }
 
   return {
     ephemeralSecret: !sessionSecret,
+    adminEnabled: Boolean(roles.admin),
 
-    /** Constant-time, including for a guess of a different length. */
+    /**
+     * Constant-time against both passwords, including guesses of a different
+     * length. Both comparisons always run, so timing says nothing about which
+     * password a guess was close to.
+     * @returns {'admin'|'viewer'|null}
+     */
     checkPassword(candidate) {
-      if (typeof candidate !== 'string' || !candidate) return false;
-      return crypto.timingSafeEqual(digest(candidate), expected);
+      if (typeof candidate !== 'string' || !candidate) return null;
+      const d = digest(candidate);
+      let match = null;
+      for (const role of ['viewer', 'admin']) {
+        if (roles[role] && crypto.timingSafeEqual(d, roles[role].expected)) match = role;
+      }
+      return match;
     },
 
-    issue() {
-      const payload = String(now() + sessionMaxAgeMs);
-      return `${payload}.${sign(payload)}`;
+    /** @returns {{token: string, maxAgeMs: number}} */
+    issue(role) {
+      const { maxAgeMs } = roles[role];
+      const payload = `${role}.${now() + maxAgeMs}`;
+      return { token: `${payload}.${sign(role, payload)}`, maxAgeMs };
     },
 
-    verify(token) {
-      if (typeof token !== 'string') return false;
-      const dot = token.indexOf('.');
-      if (dot <= 0) return false;
-      const payload = token.slice(0, dot);
-      const given = Buffer.from(token.slice(dot + 1));
-      const wanted = Buffer.from(sign(payload));
-      if (given.length !== wanted.length || !crypto.timingSafeEqual(given, wanted)) return false;
-      const expiresAt = Number(payload);
-      return Number.isFinite(expiresAt) && expiresAt > now();
+    /** @returns {'admin'|'viewer'|null} the session's role, if it is valid */
+    verify,
+
+    /**
+     * Anti-forgery token for admin requests, bound to the session cookie.
+     * Pages embed it; every /admin request must send it back in a header,
+     * which another site cannot do.
+     */
+    csrfToken(sessionToken) {
+      if (verify(sessionToken) !== 'admin') return '';
+      return crypto.createHmac('sha256', roles.admin.key).update(`csrf\0${sessionToken}`).digest('base64url');
+    },
+
+    checkCsrf(sessionToken, given) {
+      if (typeof given !== 'string' || !given) return false;
+      const wanted = this.csrfToken(sessionToken);
+      return Boolean(wanted) && sameBytes(given, wanted);
     },
   };
 }

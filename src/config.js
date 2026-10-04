@@ -95,6 +95,11 @@ export function loadConfig(env = process.env) {
         // everyone out. Harmless, but set it if that gets annoying.
         sessionSecret: str('SESSION_SECRET', ''),
         sessionMaxAgeMs: int('SESSION_DAYS', 30, { min: 1, max: 3650 }) * 86_400_000,
+        // Optional. Unlocks upload, new folder, rename and delete. Empty
+        // leaves the site download-only.
+        adminPassword: str('ADMIN_PASSWORD', ''),
+        // Short, so a forgotten signed-in browser is not an open door.
+        adminSessionMaxAgeMs: int('ADMIN_SESSION_HOURS', 12, { min: 1, max: 24 * 90 }) * 3_600_000,
         maxFailures: int('LOGIN_MAX_FAILURES', 10, { min: 1 }),
         failureWindowMs: int('LOGIN_LOCKOUT_MINUTES', 15, { min: 1 }) * 60_000,
       },
@@ -115,6 +120,14 @@ export function loadConfig(env = process.env) {
     }
     if (cfg.auth.password && cfg.auth.password.length < 8) {
       problems.push('SITE_PASSWORD must be at least 8 characters');
+    }
+    if (cfg.auth.adminPassword) {
+      if (cfg.auth.adminPassword.length < 16) {
+        problems.push('ADMIN_PASSWORD must be at least 16 characters');
+      }
+      if (cfg.auth.adminPassword === cfg.auth.password) {
+        problems.push('ADMIN_PASSWORD must differ from SITE_PASSWORD');
+      }
     }
 
     try {

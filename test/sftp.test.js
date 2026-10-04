@@ -143,3 +143,74 @@ test('closes an idle connection and opens a fresh one when needed', async (t) =>
   await store.list('');
   assert.equal(srv.stats.connections, 2);
 });
+
+// ------------------------------------------------------------ admin writes
+
+test('mkdir creates a folder, postfixing a clash', async (t) => {
+  const { dir, store } = await setup(t);
+  assert.equal(await store.mkdir('', 'New'), 'New');
+  assert.equal(await store.mkdir('', 'New'), 'New (1)');
+  assert.equal(await store.mkdir('', 'sub'), 'sub (1)');
+  assert.ok(fs.statSync(path.join(dir, 'public', 'New (1)')).isDirectory());
+});
+
+test('rename keeps the extension when postfixing', async (t) => {
+  const { dir, store } = await setup(t);
+  fs.writeFileSync(path.join(dir, 'public', 'b.txt'), 'b');
+  assert.equal(await store.rename('b.txt', 'hello.txt'), 'hello (1).txt');
+  assert.equal(await store.rename('hello.txt', 'greeting.txt'), 'greeting.txt');
+  assert.equal(await store.rename('greeting.txt', 'greeting.txt'), 'greeting.txt');
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'public')).sort(), ['greeting.txt', 'hello (1).txt', 'sub']);
+});
+
+test('remove deletes files and whole folders', async (t) => {
+  const { dir, store } = await setup(t);
+  fs.mkdirSync(path.join(dir, 'public', 'sub', 'nested'));
+  fs.writeFileSync(path.join(dir, 'public', 'sub', 'nested', 'x'), 'x');
+  await store.remove('hello.txt');
+  await store.remove('sub');
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'public')), []);
+  await assert.rejects(store.remove('sub'), (err) => err.status === 404);
+});
+
+test('writes refuse bad names, the root itself, and climbing out', async (t) => {
+  const { store } = await setup(t);
+  await assert.rejects(store.mkdir('', '.ssh'), (err) => err.status === 400);
+  await assert.rejects(store.mkdir('', 'a/b'), (err) => err.status === 400);
+  await assert.rejects(store.rename('hello.txt', '..'), (err) => err.status === 400);
+  await assert.rejects(store.remove(''), (err) => err.status === 400);
+  await assert.rejects(store.mkdir('nope', 'x'), (err) => err.status === 404);
+});
+
+test('a staged upload is written in chunks, then moved into place', async (t) => {
+  const { dir, store } = await setup(t);
+  const id = 'a'.repeat(32);
+  const { Readable } = await import('node:stream');
+
+  await store.beginUpload(id);
+  assert.deepEqual((await store.list('')).map((e) => e.name).sort(), ['hello.txt', 'sub'], 'staging is hidden');
+  await store.writeUpload(id, 0, Readable.from([Buffer.from('hello ')]));
+  assert.equal(await store.uploadedBytes(id), 6);
+  await store.writeUpload(id, 6, Readable.from([Buffer.from('again')]));
+  assert.equal(await store.finishUpload(id, 'sub', 'deep.bin'), 'deep (1).bin');
+  assert.equal(fs.readFileSync(path.join(dir, 'public', 'sub', 'deep (1).bin'), 'utf8'), 'hello again');
+  await assert.rejects(store.uploadedBytes(id), (err) => err.status === 404);
+});
+
+test('abandoned uploads are swept, fresh ones kept', async (t) => {
+  const { store } = await setup(t);
+  await store.beginUpload('b'.repeat(32));
+  assert.equal(await store.sweepUploads(60_000), 0);
+  assert.equal(await store.sweepUploads(60_000, Date.now() + 120_000), 1);
+  await assert.rejects(store.uploadedBytes('b'.repeat(32)), (err) => err.status === 404);
+});
+
+test('usage tallies the folder by category', async (t) => {
+  const { dir, store } = await setup(t);
+  fs.writeFileSync(path.join(dir, 'public', 'sub', 'pic.JPG'), Buffer.alloc(500));
+  const usage = await store.usage();
+  assert.deepEqual(usage.categories, { documents: 11, other: 100_000, photos: 500 });
+  assert.equal(usage.partial, false);
+  // The stand-in server has no statvfs extension; that must not break it.
+  assert.equal(usage.disk, null);
+});

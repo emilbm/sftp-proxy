@@ -35,3 +35,32 @@ export function isWithin(root, candidate) {
   const base = root.endsWith('/') ? root : `${root}/`;
   return candidate.startsWith(base);
 }
+
+/**
+ * Is `name` acceptable for something an admin creates or renames to?
+ *
+ * Names starting with a dot are refused outright: they are hidden from the
+ * listing, the upload staging folder is one, and on a loosely configured
+ * server `.ssh` is how an upload turns into a login.
+ *
+ * @returns {string|null} why it is not acceptable, or null if it is
+ */
+export function invalidName(name) {
+  if (typeof name !== 'string' || !name.trim()) return 'A name is required';
+  if (name !== name.trim()) return 'Names cannot start or end with a space';
+  if (name.startsWith('.')) return 'Names cannot start with a dot';
+  if (/[/\\]/.test(name)) return 'Names cannot contain / or \\';
+  if (/[\x00-\x1f\x7f]/.test(name)) return 'Names cannot contain control characters';
+  if (Buffer.byteLength(name) > 255) return 'That name is too long';
+  return null;
+}
+
+/**
+ * `report.pdf` -> `report (2).pdf`. Keeps double extensions like `.tar.gz`
+ * together, and treats a folder name as having no extension at all.
+ */
+export function withPostfix(name, n, { isDir = false } = {}) {
+  if (n === 0) return name;
+  const m = isDir ? null : /^(.+?)((?:\.tar)?\.[^.\s]{1,10})$/i.exec(name);
+  return m ? `${m[1]} (${n})${m[2]}` : `${name} (${n})`;
+}

@@ -37,6 +37,7 @@ async function main() {
     sftp: `${cfg.sftp.username}@${cfg.sftp.host}:${cfg.sftp.port}`,
     folder: cfg.sftp.root,
     hostKeyPinned: Boolean(cfg.sftp.hostKeySha256),
+    admin: auth.adminEnabled ? 'enabled' : 'off (no ADMIN_PASSWORD)',
   });
   if (auth.ephemeralSecret) {
     log.info('no SESSION_SECRET set - visitors will need to sign in again after a restart');

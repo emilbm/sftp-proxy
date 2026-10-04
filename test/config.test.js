@@ -82,3 +82,29 @@ test('isWithin does not confuse a sibling with a prefix', () => {
   assert.equal(isWithin('/srv/public', '/srv/public-not'), false);
   assert.equal(isWithin('/', '/anything'), true);
 });
+
+test('the admin password is optional, long, and distinct', () => {
+  assert.equal(loadConfig(minimal).auth.adminPassword, '');
+  const cfg = loadConfig({ ...minimal, ADMIN_PASSWORD: 'sixteen chars ok' });
+  assert.equal(cfg.auth.adminPassword, 'sixteen chars ok');
+  assert.equal(cfg.auth.adminSessionMaxAgeMs, 12 * 3_600_000);
+  assert.throws(() => loadConfig({ ...minimal, ADMIN_PASSWORD: 'too short' }), /at least 16/);
+  assert.throws(
+    () => loadConfig({ ...minimal, SITE_PASSWORD: 'same as the admin one', ADMIN_PASSWORD: 'same as the admin one' }),
+    /must differ/,
+  );
+});
+
+test('postfixes keep extensions, including .tar.gz', async () => {
+  const { withPostfix, invalidName } = await import('../src/paths.js');
+  assert.equal(withPostfix('report.pdf', 2), 'report (2).pdf');
+  assert.equal(withPostfix('backup.tar.gz', 1), 'backup (1).tar.gz');
+  assert.equal(withPostfix('my.notes.txt', 1), 'my.notes (1).txt');
+  assert.equal(withPostfix('README', 1), 'README (1)');
+  assert.equal(withPostfix('v1.2 release', 1, { isDir: true }), 'v1.2 release (1)');
+  assert.equal(withPostfix('x.pdf', 0), 'x.pdf');
+  assert.equal(invalidName('ok name.txt'), null);
+  for (const bad of ['', ' ', '.env', 'a/b', 'a\\b', ' lead', 'trail ', 'nul\0', 'x'.repeat(256)]) {
+    assert.ok(invalidName(bad), `${JSON.stringify(bad)} should be refused`);
+  }
+});

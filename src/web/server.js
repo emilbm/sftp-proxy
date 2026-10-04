@@ -5,18 +5,28 @@ import { pipeline } from 'node:stream';
 import { createLogger } from '../logger.js';
 import { COOKIE_NAME, parseCookies } from '../auth.js';
 import { cleanRelative } from '../paths.js';
-import { HttpError } from '../sftp.js';
+import { HttpError, STAGING_DIR } from '../sftp.js';
 import { loginPage, listingPage, errorPage } from './views.js';
+import { createAdmin } from './admin.js';
 
 const log = createLogger('web');
 
-const STYLES = fs.readFileSync(path.join(import.meta.dirname, 'static', 'styles.css'));
+const STATIC = {
+  '/static/styles.css': ['text/css; charset=utf-8', fs.readFileSync(path.join(import.meta.dirname, 'static', 'styles.css'))],
+  '/static/app.js': ['text/javascript; charset=utf-8', fs.readFileSync(path.join(import.meta.dirname, 'static', 'app.js'))],
+};
+// The storage bar walks the whole public tree, so it is cached and refreshed
+// in the background rather than recomputed on every page view.
+const USAGE_FRESH_MS = 5 * 60 * 1000;
+const USAGE_WAIT_MS = 1500;
 const MAX_FORM_BYTES = 8 * 1024;
 
 const SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'none'",
     "style-src 'self'",
+    "script-src 'self'",
+    "connect-src 'self'",
     "img-src 'self' data:",
     "form-action 'self'",
     "frame-ancestors 'none'",
@@ -106,6 +116,55 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
   });
   const formatDate = (d) => dateFormat.format(d);
 
+  /**
+   * A cleaned relative path the visitor may touch: inside the root, never the
+   * upload staging folder, and no dot-segments unless hidden files are shown.
+   */
+  function allowed(rel) {
+    if (rel === null) return false;
+    const segments = rel ? rel.split('/') : [];
+    if (segments[0] === STAGING_DIR) return false;
+    return cfg.web.showHidden || !segments.some((seg) => seg.startsWith('.'));
+  }
+  function relOrThrow(input) {
+    const rel = cleanRelative(typeof input === 'string' ? input : '');
+    if (!allowed(rel)) throw new HttpError(404, 'That does not exist');
+    return rel;
+  }
+
+  // `changed` is set by an admin action, so the admin's next page waits for
+  // the recount instead of showing the figure from before their upload.
+  let usage = { value: null, at: 0, pending: null, changed: false };
+  function refreshUsage() {
+    usage.pending ??= store.usage()
+      .then((value) => { usage = { value, at: Date.now(), pending: null, changed: false }; })
+      .catch((err) => {
+        usage.pending = null;
+        log.warn('could not measure storage', { error: err.message });
+      });
+    return usage.pending;
+  }
+  /** Current usage if known; a stale value is served while a fresh one loads. */
+  async function currentUsage() {
+    if (Date.now() - usage.at > USAGE_FRESH_MS) {
+      const loading = refreshUsage();
+      if (!usage.value || usage.changed) {
+        await Promise.race([loading, new Promise((r) => { setTimeout(r, USAGE_WAIT_MS).unref?.(); })]);
+      }
+    }
+    return usage.value;
+  }
+
+  const admin = createAdmin({
+    store,
+    relOrThrow,
+    clientKey: (req) => clientKey(req),
+    onChange: () => {
+      usage.at = 0;
+      usage.changed = true;
+    },
+  });
+
   function clientKey(req) {
     if (cfg.web.trustProxy) {
       const cf = req.headers['cf-connecting-ip'];
@@ -144,6 +203,15 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
     res.end(body);
   }
 
+  function json(res, status, body) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(JSON.stringify(body));
+  }
+
   function redirect(res, location, extra = {}) {
     res.writeHead(303, { Location: location, 'Cache-Control': 'no-store', ...extra });
     res.end();
@@ -162,35 +230,37 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
 
     const form = await readForm(req);
     const next = safeNext(form.get('next'));
-    if (!auth.checkPassword(form.get('password'))) {
+    const role = auth.checkPassword(form.get('password'));
+    if (!role) {
       limiter.fail(key);
       log.info('failed login', { client: key });
       return html(res, 401, loginPage({ siteTitle, error: 'Wrong password.', next }));
     }
 
     limiter.succeed(key);
-    log.info('signed in', { client: key });
-    const maxAge = Math.floor(cfg.auth.sessionMaxAgeMs / 1000);
-    return redirect(res, next, { 'Set-Cookie': sessionCookie(req, auth.issue(), maxAge) });
+    log.info('signed in', { client: key, role });
+    const { token, maxAgeMs } = auth.issue(role);
+    return redirect(res, next, { 'Set-Cookie': sessionCookie(req, token, Math.floor(maxAgeMs / 1000)) });
   }
 
-  async function handleBrowse(req, res, url) {
+  async function handleBrowse(req, res, url, session) {
     const rel = relFromPath(url.pathname, '/browse/');
-    if (rel === null) throw new HttpError(404, 'That folder does not exist');
+    if (!allowed(rel)) throw new HttpError(404, 'That folder does not exist');
     if (rel && !url.pathname.endsWith('/')) return redirect(res, `${url.pathname}/`);
 
-    let entries = await store.list(rel);
-    if (!cfg.web.showHidden) entries = entries.filter((e) => !e.name.startsWith('.'));
-    return html(res, 200, listingPage({ siteTitle, rel, entries, formatDate }));
+    const [listed, storage] = await Promise.all([store.list(rel), currentUsage()]);
+    const entries = cfg.web.showHidden ? listed : listed.filter((e) => !e.name.startsWith('.'));
+    return html(res, 200, listingPage({
+      siteTitle, rel, entries, formatDate, storage,
+      admin: session.role === 'admin',
+      csrf: session.role === 'admin' ? auth.csrfToken(session.token) : '',
+    }));
   }
 
   async function handleDownload(req, res, url) {
     const rel = relFromPath(url.pathname, '/download/');
-    if (!rel) throw new HttpError(404, 'That file does not exist');
+    if (!rel || !allowed(rel)) throw new HttpError(404, 'That file does not exist');
     const name = rel.split('/').pop();
-    if (!cfg.web.showHidden && rel.split('/').some((s) => s.startsWith('.'))) {
-      throw new HttpError(404, 'That file does not exist');
-    }
 
     const file = await store.open(rel);
     const etag = `W/"${file.size.toString(16)}-${(file.mtime?.getTime() ?? 0).toString(16)}"`;
@@ -267,16 +337,37 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       return res.end('{"status":"ok"}');
     }
-    if (pathname === '/static/styles.css') {
-      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-cache' });
-      return res.end(STYLES);
+    if (STATIC[pathname]) {
+      const [type, body] = STATIC[pathname];
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(body);
     }
     if (pathname === '/favicon.ico') {
       res.writeHead(204);
       return res.end();
     }
 
-    const signedIn = auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]);
+    const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    const session = { token, role: auth.verify(token) };
+    const signedIn = Boolean(session.role);
+
+    if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+      if (!auth.adminEnabled) throw new HttpError(404, 'There is nothing at this address');
+      if (!signedIn) throw new HttpError(401, 'Sign in first');
+      if (session.role !== 'admin') throw new HttpError(403, 'Only the admin password can change files');
+      // Belt and braces against another site driving an admin's browser: the
+      // token comes from the page, and a cross-site Origin is refused outright.
+      const origin = req.headers.origin;
+      if (origin && origin !== 'null') {
+        let host = '';
+        try { host = new URL(origin).host; } catch { /* stays empty */ }
+        if (host !== req.headers.host) throw new HttpError(403, 'Cross-site request refused');
+      }
+      if (!auth.checkCsrf(token, req.headers['x-csrf-token'])) {
+        throw new HttpError(403, 'Missing or stale page token - reload the page and try again');
+      }
+      return admin.route(req, res, url, (status, body) => json(res, status, body));
+    }
 
     if (pathname === '/login') {
       if (method === 'POST') return handleLogin(req, res);
@@ -298,7 +389,7 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
     if (method !== 'GET' && method !== 'HEAD') throw new HttpError(405, 'Method not allowed');
 
     if (pathname === '/' || pathname === '/browse') return redirect(res, '/browse/');
-    if (pathname.startsWith('/browse/')) return handleBrowse(req, res, url);
+    if (pathname.startsWith('/browse/')) return handleBrowse(req, res, url, session);
     if (pathname.startsWith('/download/')) return handleDownload(req, res, url);
     if (pathname === '/throw') {
       // Deliberate failure, for confirming error reporting end to end. Only
@@ -341,10 +432,16 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
         res.destroy();
         return;
       }
-      const signedIn = auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]);
       const message = status >= 500 && !(err instanceof HttpError)
         ? 'An unexpected error occurred. It has been logged.'
         : err.message;
+      if (url.pathname.startsWith('/admin/')) {
+        // Drain what is left of an upload so the browser reads our answer
+        // instead of seeing the connection reset.
+        if (!req.complete) req.resume();
+        return json(res, status, { error: message, eventId, ...err.body });
+      }
+      const signedIn = Boolean(auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]));
       html(res, status, errorPage({ siteTitle, status, message, eventId, signedIn }));
     });
   });
@@ -356,6 +453,14 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
   server.on('clientError', (err, socket) => {
     if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });
+  server.on('close', () => admin.close());
+
+  // A 16 MB upload chunk on a slow line can take minutes; Node's default
+  // five-minute cap on receiving a request would cut it off.
+  server.requestTimeout = 30 * 60 * 1000;
+
+  // Measure storage once at startup, so the first page view has a bar.
+  refreshUsage();
 
   return server;
 }

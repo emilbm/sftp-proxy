@@ -4,7 +4,8 @@
 //   npm run dev                 # serves a generated sample folder
 //   npm run dev -- C:\some\dir  # serves <dir>/public instead
 //
-// The site is at http://localhost:8080, password "development".
+// The site is at http://localhost:8080: password "development" to browse,
+// "development-admin" to upload and manage files.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +37,7 @@ Object.assign(process.env, {
   SFTP_USERNAME: srv.username,
   SFTP_PASSWORD: srv.password,
   SITE_PASSWORD: process.env.SITE_PASSWORD || 'development',
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'development-admin',
   SESSION_SECRET: process.env.SESSION_SECRET || 'development',
   SITE_TITLE: process.env.SITE_TITLE || 'Files (dev)',
   LOG_LEVEL: process.env.LOG_LEVEL || 'debug',

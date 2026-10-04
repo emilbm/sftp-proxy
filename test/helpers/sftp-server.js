@@ -5,13 +5,26 @@ import ssh2 from 'ssh2';
 const { Server, utils } = ssh2;
 const { STATUS_CODE } = utils.sftp;
 
+// ssh2 now and then generates an ed25519 key its own parser rejects
+// ("Malformed OpenSSH private key"), so check before use, and make one per
+// test process rather than one per server.
+let cachedHostKey = null;
+function hostKeyPair() {
+  for (let i = 0; !cachedHostKey && i < 20; i += 1) {
+    const pair = utils.generateKeyPairSync('ed25519');
+    if (!(utils.parseKey(pair.private) instanceof Error)) cachedHostKey = pair;
+  }
+  if (!cachedHostKey) throw new Error('could not generate a usable host key');
+  return cachedHostKey;
+}
+
 /**
  * A tiny read-only SFTP server over a local directory, enough to exercise the
  * real client end to end: REALPATH, STAT/LSTAT, OPENDIR/READDIR, OPEN/READ.
  * The directory is exposed as `/`, and the login directory is `/`.
  */
 export async function startSftpServer({ dir, username = 'test', password = 'secret' }) {
-  const hostKey = utils.generateKeyPairSync('ed25519');
+  const hostKey = hostKeyPair();
   const sockets = new Set();
   const stats = { connections: 0 };
 
@@ -94,9 +107,54 @@ export async function startSftpServer({ dir, username = 'test', password = 'secr
               return { filename: name, longname: name, attrs: attrsOf(st) };
             }));
           });
-          sftp.on('OPEN', (reqid, p) => {
+          sftp.on('OPEN', (reqid, p, flags) => {
             try {
-              sftp.handle(reqid, newHandle({ fd: fs.openSync(toLocal(p), 'r') }));
+              const mode = utils.sftp.flagsToString(flags) ?? 'r';
+              sftp.handle(reqid, newHandle({ fd: fs.openSync(toLocal(p), mode) }));
+            } catch (err) {
+              fail(reqid, err);
+            }
+          });
+          sftp.on('WRITE', (reqid, handle, offset, data) => {
+            const h = handles.get(handle.toString('hex'));
+            fs.writeSync(h.fd, data, 0, data.length, Number(offset));
+            sftp.status(reqid, STATUS_CODE.OK);
+          });
+          for (const op of ['SETSTAT', 'FSETSTAT']) {
+            sftp.on(op, (reqid) => sftp.status(reqid, STATUS_CODE.OK));
+          }
+          // Mirror OpenSSH: creating or renaming onto an existing name is a
+          // generic FAILURE, never an overwrite.
+          sftp.on('MKDIR', (reqid, p) => {
+            try {
+              fs.mkdirSync(toLocal(p));
+              sftp.status(reqid, STATUS_CODE.OK);
+            } catch (err) {
+              fail(reqid, err);
+            }
+          });
+          sftp.on('RENAME', (reqid, from, to) => {
+            try {
+              if (fs.existsSync(toLocal(to))) return sftp.status(reqid, STATUS_CODE.FAILURE);
+              fs.renameSync(toLocal(from), toLocal(to));
+              sftp.status(reqid, STATUS_CODE.OK);
+            } catch (err) {
+              fail(reqid, err);
+            }
+          });
+          sftp.on('REMOVE', (reqid, p) => {
+            try {
+              if (fs.lstatSync(toLocal(p)).isDirectory()) return sftp.status(reqid, STATUS_CODE.FAILURE);
+              fs.unlinkSync(toLocal(p));
+              sftp.status(reqid, STATUS_CODE.OK);
+            } catch (err) {
+              fail(reqid, err);
+            }
+          });
+          sftp.on('RMDIR', (reqid, p) => {
+            try {
+              fs.rmdirSync(toLocal(p));
+              sftp.status(reqid, STATUS_CODE.OK);
             } catch (err) {
               fail(reqid, err);
             }
