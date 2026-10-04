@@ -1,0 +1,11 @@
+# Overlay that builds from this checkout instead of pulling the published
+# image. Only useful if you have the source; deployments do not need it.
+#
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+#
+# The image is retagged so a local build never shadows the published :latest.
+services:
+  sftp-proxy:
+    build: .
+    image: sftp-proxy:dev
+    pull_policy: never

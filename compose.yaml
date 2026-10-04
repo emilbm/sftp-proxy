@@ -1,0 +1,34 @@
+# Deployment compose file. It pulls a published image - there is deliberately
+# no `build:` here, so a target host needs nothing but Docker, this file and
+# a .env. To build from a source checkout instead, see compose.build.yaml.
+services:
+  sftp-proxy:
+    # Pin to a release tag (e.g. :1.0.0) if you would rather decide when to
+    # move. `latest` tracks the main branch.
+    image: ghcr.io/emilbm/sftp-proxy:latest
+    container_name: sftp-proxy
+    restart: unless-stopped
+    env_file: .env
+
+    ports:
+      # Plain HTTP. Fine on the LAN; for the internet put a Cloudflare tunnel
+      # (or Caddy) in front so the password never crosses the wire unencrypted.
+      - "8080:8080"
+
+    # Only needed with SFTP_PRIVATE_KEY_PATH. Mount the key read-only and make
+    # it readable by uid 1000 (the `node` user in the image).
+    # volumes:
+    #   - ./id_ed25519:/run/secrets/sftp_key:ro
+
+    # Without this a long-running container can quietly fill the VM's disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp

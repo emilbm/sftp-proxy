@@ -1,0 +1,2 @@
+# This repo is deployed to Linux containers; keep LF in the index and checkout.
+* text=auto eol=lf

@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+test
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.md
+compose.yaml
+compose.build.yaml

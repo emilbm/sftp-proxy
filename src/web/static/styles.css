@@ -1,0 +1,134 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2026;
+  --muted: #69707d;
+  --border: #e2e5ea;
+  --accent: #2563eb;
+  --hover: #f0f3f8;
+  --error: #b42318;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317;
+    --surface: #1a1d23;
+    --text: #e6e8eb;
+    --muted: #8d94a0;
+    --border: #2b3038;
+    --accent: #7aa2ff;
+    --hover: #22262e;
+    --error: #ff8a80;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 16px 8px;
+}
+.brand { color: var(--text); font-weight: 600; font-size: 17px; }
+
+main { max-width: 960px; margin: 0 auto; padding: 0 16px 48px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+h1 { font-size: 20px; margin: 0 0 12px; }
+.card > h1, .card > p { margin-left: 20px; margin-right: 20px; }
+.card > h1:first-child { margin-top: 20px; }
+
+.crumbs { margin: 8px 0 12px; color: var(--muted); overflow-wrap: anywhere; }
+.crumbs .sep { margin: 0 6px; }
+.crumbs [aria-current] { color: var(--text); font-weight: 600; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--hover); }
+
+td.name { overflow-wrap: anywhere; }
+td.name a { display: flex; align-items: center; gap: 10px; color: var(--text); }
+.size, .date { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+th.size, td.size { text-align: right; }
+
+.icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  background: var(--muted);
+  -webkit-mask: var(--glyph) center / contain no-repeat;
+  mask: var(--glyph) center / contain no-repeat;
+}
+tr.file .icon {
+  --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E");
+}
+tr.dir .icon {
+  background: var(--accent);
+  --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z'/%3E%3C/svg%3E");
+}
+tr.up a { color: var(--muted); padding-left: 28px; }
+
+.empty, .summary, .muted { color: var(--muted); }
+.empty { padding: 24px 20px; margin: 0; }
+.summary { font-size: 13px; margin: 10px 2px; }
+
+.login { max-width: 360px; margin: 10vh auto 0; padding: 24px; }
+.card.login > h1 { margin: 0 0 16px; }
+.card.login > .error { margin: 0 0 12px; }
+.login label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+input[type=password] {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+input[type=password]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button {
+  font: inherit;
+  cursor: pointer;
+}
+.login button {
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+@media (prefers-color-scheme: dark) { .login button { color: #0b1020; } }
+button.link { background: none; border: 0; padding: 0; color: var(--muted); }
+button.link:hover { color: var(--text); }
+.error { color: var(--error); margin: 0 0 12px; }
+
+@media (max-width: 560px) {
+  .date { display: none; }
+  th, td { padding: 10px 12px; }
+}

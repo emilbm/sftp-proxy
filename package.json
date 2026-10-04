@@ -1,0 +1,23 @@
+{
+  "name": "sftp-proxy",
+  "version": "1.0.0",
+  "description": "A password-protected web page listing and serving the files in an SFTP server's public folder",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "dev": "node test/tools/dev.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emilbm/sftp-proxy.git"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  }
+}
