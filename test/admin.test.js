@@ -14,7 +14,7 @@ test('the admin password unlocks the admin tools; the download one does not', as
   const { cookie, csrf } = await asAdmin();
   assert.ok(csrf);
   const adminPage = await (await req('/browse/', { headers: { cookie } })).text();
-  assert.match(adminPage, /<script src="\/static\/app.js" defer>/);
+  assert.match(adminPage, /<script src="\/static\/app\.js\?v=[0-9a-f]{12}" defer>/);
   assert.match(adminPage, /Upload files/);
   assert.match(adminPage, /class="badge">Admin/);
   assert.match(adminPage, /data-path="hello.txt"/);

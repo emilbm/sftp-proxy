@@ -1,3 +1,5 @@
+import { assetUrl } from './assets.js';
+
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
 export function esc(value) {
@@ -39,8 +41,8 @@ function layout({ title, body, siteTitle, signedIn = false, admin = false, csrf 
 <meta name="robots" content="noindex, nofollow">
 ${csrf ? `<meta name="csrf" content="${esc(csrf)}">` : ''}
 <title>${esc(title)}</title>
-<link rel="stylesheet" href="/static/styles.css">
-${admin ? '<script src="/static/app.js" defer></script>' : ''}
+<link rel="stylesheet" href="${assetUrl('/static/styles.css')}">
+${admin ? `<script src="${assetUrl('/static/app.js')}" defer></script>` : ''}
 </head>
 <body${dir !== null ? ` data-dir="${esc(dir)}"` : ''}>
 <header class="top">
@@ -133,11 +135,11 @@ export function storageBar(storage) {
     return rect;
   }).join('') : '';
 
-  const legend = segments.map((s) => `<li><svg class="dot" viewBox="0 0 10 10" aria-hidden="true"><circle class="seg-${s.key}" cx="5" cy="5" r="5"/></svg>${esc(s.label)} <span>${esc(formatSize(s.bytes))}</span></li>`).join('');
+  const legend = segments.map((s) => `<li><svg class="dot" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle class="seg-${s.key}" cx="5" cy="5" r="5"/></svg>${esc(s.label)} <span>${esc(formatSize(s.bytes))}</span></li>`).join('');
 
   return `<section class="storage" aria-label="Storage">
   <div class="storage-head"><strong>${esc(heading)}</strong>${detail ? `<span>${esc(detail)}</span>` : ''}</div>
-  <svg class="storage-bar" viewBox="0 0 ${UNITS} 10" preserveAspectRatio="none" role="img" aria-label="${esc(heading)}">
+  <svg class="storage-bar" width="100%" height="12" viewBox="0 0 ${UNITS} 10" preserveAspectRatio="none" role="img" aria-label="${esc(heading)}">
     <defs><clipPath id="bar-round"><rect width="${UNITS}" height="10" rx="5" ry="5"/></clipPath></defs>
     <g clip-path="url(#bar-round)"><rect class="seg-free" width="${UNITS}" height="10"/>${rects}</g>
   </svg>

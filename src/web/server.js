@@ -1,6 +1,4 @@
 import http from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { createLogger } from '../logger.js';
 import { COOKIE_NAME, parseCookies } from '../auth.js';
@@ -8,13 +6,10 @@ import { cleanRelative } from '../paths.js';
 import { HttpError, STAGING_DIR } from '../sftp.js';
 import { loginPage, listingPage, errorPage } from './views.js';
 import { createAdmin } from './admin.js';
+import { ASSETS } from './assets.js';
 
 const log = createLogger('web');
 
-const STATIC = {
-  '/static/styles.css': ['text/css; charset=utf-8', fs.readFileSync(path.join(import.meta.dirname, 'static', 'styles.css'))],
-  '/static/app.js': ['text/javascript; charset=utf-8', fs.readFileSync(path.join(import.meta.dirname, 'static', 'app.js'))],
-};
 // The storage bar walks the whole public tree, so it is cached and refreshed
 // in the background rather than recomputed on every page view.
 const USAGE_FRESH_MS = 5 * 60 * 1000;
@@ -337,10 +332,18 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       return res.end('{"status":"ok"}');
     }
-    if (STATIC[pathname]) {
-      const [type, body] = STATIC[pathname];
-      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
-      return res.end(body);
+    const asset = ASSETS[pathname];
+    if (asset) {
+      // Pages always link the hashed URL, which can be cached for good. An
+      // unversioned or stale-version request still gets the current file,
+      // just not cached.
+      const current = url.searchParams.get('v') === asset.version;
+      res.writeHead(200, {
+        'Content-Type': asset.type,
+        'Cache-Control': current ? 'public, max-age=31536000, immutable' : 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      return res.end(asset.body);
     }
     if (pathname === '/favicon.ico') {
       res.writeHead(204);

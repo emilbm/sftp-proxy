@@ -249,3 +249,18 @@ test('404s and visitor mistakes are not reported', async (t) => {
   await login('wrong');
   assert.equal(captured.length, 0);
 });
+
+test('assets are linked by content hash and cached for good only at that URL', async (t) => {
+  const { authed, req } = await setup(t);
+  const page = await (await authed('/browse/')).text();
+  const href = /<link rel="stylesheet" href="([^"]+)">/.exec(page)[1];
+  assert.match(href, /^\/static\/styles\.css\?v=[0-9a-f]{12}$/);
+
+  const current = await req(href);
+  assert.match(current.headers.get('cache-control'), /immutable/);
+  assert.match(await current.text(), /storage-bar/);
+
+  // An old or missing version still gets the file, but never a cacheable one.
+  assert.equal((await req('/static/styles.css?v=000000000000')).headers.get('cache-control'), 'no-store');
+  assert.equal((await req('/static/styles.css')).headers.get('cache-control'), 'no-store');
+});
