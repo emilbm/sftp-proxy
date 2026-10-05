@@ -1,6 +1,6 @@
 {
   "name": "sftp-proxy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A password-protected web page listing and serving the files in an SFTP server's public folder",
   "private": true,
   "type": "module",

@@ -9,7 +9,7 @@ import { setup, ADMIN } from './helpers/site.js';
 test('the admin password unlocks the admin tools; the download one does not', async (t) => {
   const { authed, req, asAdmin } = await setup(t);
   const viewerPage = await (await authed('/browse/')).text();
-  assert.doesNotMatch(viewerPage, /app\.js|name="csrf"|Upload files|data-action/);
+  assert.doesNotMatch(viewerPage, /Upload files|data-action="(upload|mkdir|rename|delete)"|data-admin|class="badge"/);
 
   const { cookie, csrf } = await asAdmin();
   assert.ok(csrf);

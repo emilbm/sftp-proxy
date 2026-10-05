@@ -32,7 +32,10 @@ export function sortEntries(entries) {
   });
 }
 
-function layout({ title, body, siteTitle, signedIn = false, admin = false, csrf = '', dir = null }) {
+function layout({
+  title, body, siteTitle, signedIn = false, admin = false, csrf = '', dir = null, script = false,
+  brandHref = '/browse/',
+}) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -42,11 +45,11 @@ function layout({ title, body, siteTitle, signedIn = false, admin = false, csrf 
 ${csrf ? `<meta name="csrf" content="${esc(csrf)}">` : ''}
 <title>${esc(title)}</title>
 <link rel="stylesheet" href="${assetUrl('/static/styles.css')}">
-${admin ? `<script src="${assetUrl('/static/app.js')}" defer></script>` : ''}
+${script ? `<script src="${assetUrl('/static/app.js')}" defer></script>` : ''}
 </head>
-<body${dir !== null ? ` data-dir="${esc(dir)}"` : ''}>
+<body${dir !== null ? ` data-dir="${esc(dir)}"` : ''}${admin ? ' data-admin' : ''}>
 <header class="top">
-  <a class="brand" href="/browse/">${esc(siteTitle)}</a>
+  ${brandHref ? `<a class="brand" href="${brandHref}">${esc(siteTitle)}</a>` : `<span class="brand">${esc(siteTitle)}</span>`}
   ${signedIn ? `<div class="session">
     ${admin ? '<span class="badge">Admin</span>' : ''}
     <form method="post" action="/logout"><button class="link" type="submit">Sign out</button></form>
@@ -147,23 +150,58 @@ export function storageBar(storage) {
 </section>`;
 }
 
+function iconButton(action, label) {
+  return `<button type="button" class="icon-btn ${action}" data-action="${action}" title="${label}"><span class="sr">${label}</span></button>`;
+}
+
+/** The "Share link" dialog, filled in and opened by app.js. */
+function shareDialog(shareDays, defaultShareDays) {
+  const options = shareDays.map((d) => `<option value="${d}"${d === defaultShareDays ? ' selected' : ''}>${d === 1 ? '1 day' : d === 365 ? '1 year' : `${d} days`}</option>`).join('');
+  return `<dialog id="share-dialog" class="dialog">
+  <form method="dialog" class="dialog-body">
+    <h2>Share link</h2>
+    <p class="muted">Anyone with the link can download <strong id="share-name"></strong>, without a password, until it expires.</p>
+    <label for="share-days">Expires after</label>
+    <div class="share-row">
+      <select id="share-days">${options}</select>
+      <button type="button" id="share-create" class="primary">Create link</button>
+    </div>
+    <div id="share-result" hidden>
+      <label for="share-url">Link</label>
+      <div class="share-row">
+        <input id="share-url" type="text" readonly>
+        <button type="button" id="share-copy" class="primary">Copy</button>
+      </div>
+      <p class="muted" id="share-expiry"></p>
+    </div>
+    <p class="error" id="share-error" hidden></p>
+    <div class="dialog-actions"><button value="close" class="secondary">Done</button></div>
+  </form>
+</dialog>`;
+}
+
 export function listingPage({
   siteTitle, rel, entries, formatDate, storage = null, admin = false, csrf = '',
+  sharing = false, shareDays = [], defaultShareDays = 30,
 }) {
   const sorted = sortEntries(entries);
   const prefix = rel ? `${rel}/` : '';
   const files = sorted.filter((e) => e.type === 'file');
   const total = files.reduce((sum, e) => sum + (e.size ?? 0), 0);
   const dirCount = sorted.length - files.length;
-  const cols = admin ? 4 : 3;
+  const interactive = admin || sharing;
+  const cols = interactive ? 4 : 3;
 
   const rows = sorted.map((e) => {
     const target = encodePath(prefix + e.name);
     const href = e.type === 'dir' ? `/browse/${target}/` : `/download/${target}`;
-    const actions = admin
-      ? `<td class="actions"><button type="button" class="icon-btn rename" data-action="rename" title="Rename"><span class="sr">Rename</span></button><button type="button" class="icon-btn delete" data-action="delete" title="Delete"><span class="sr">Delete</span></button></td>`
-      : '';
-    return `<tr class="${e.type}"${admin ? ` data-path="${esc(prefix + e.name)}" data-name="${esc(e.name)}" data-type="${e.type}"` : ''}>
+    const buttons = [
+      sharing && e.type === 'file' ? iconButton('share', 'Share link') : '',
+      admin ? iconButton('rename', 'Rename') : '',
+      admin ? iconButton('delete', 'Delete') : '',
+    ].join('');
+    const actions = interactive ? `<td class="actions">${buttons}</td>` : '';
+    return `<tr class="${e.type}"${interactive ? ` data-path="${esc(prefix + e.name)}" data-name="${esc(e.name)}" data-type="${e.type}"` : ''}>
   <td class="name"><a href="${esc(href)}"${e.type === 'file' ? ' download' : ''}><span class="icon" aria-hidden="true"></span>${esc(e.name)}${e.type === 'dir' ? '/' : ''}</a>${e.type === 'file' ? `<small class="meta">${esc(formatSize(e.size))}</small>` : ''}</td>
   <td class="size">${e.type === 'file' ? esc(formatSize(e.size)) : ''}</td>
   <td class="date">${e.mtime ? esc(formatDate(e.mtime)) : ''}</td>${actions}
@@ -194,13 +232,14 @@ export function listingPage({
     signedIn: true,
     admin,
     csrf,
-    dir: admin ? rel : null,
+    script: interactive,
+    dir: interactive ? rel : null,
     body: `${storageBar(storage)}
 ${breadcrumbs(rel)}
 ${toolbar}
 <div class="card">
 ${sorted.length || rel ? `<table>
-<thead><tr><th class="name">Name</th><th class="size">Size</th><th class="date">Modified</th>${admin ? '<th class="actions"><span class="sr">Actions</span></th>' : ''}</tr></thead>
+<thead><tr><th class="name">Name</th><th class="size">Size</th><th class="date">Modified</th>${interactive ? '<th class="actions"><span class="sr">Actions</span></th>' : ''}</tr></thead>
 <tbody>
 ${parent}
 ${rows}
@@ -209,20 +248,37 @@ ${rows}
 ${sorted.length ? '' : '<p class="empty">This folder is empty.</p>'}
 </div>
 <p class="summary">${esc(summary)}</p>
-${admin ? '<div class="drop-overlay" hidden><p>Drop to upload here</p></div>' : ''}`,
+${admin ? '<div class="drop-overlay" hidden><p>Drop to upload here</p></div>' : ''}
+${sharing ? shareDialog(shareDays, defaultShareDays) : ''}`,
   });
 }
 
-export function errorPage({ siteTitle, status, message, eventId, signedIn }) {
+export function errorPage({ siteTitle, status, message, eventId, signedIn, heading, back = true }) {
   return layout({
     title: `${status} · ${siteTitle}`,
     siteTitle,
     signedIn,
+    brandHref: back ? '/browse/' : '',
     body: `<div class="card">
-  <h1>${status === 404 ? 'Not found' : 'Something went wrong'}</h1>
+  <h1>${esc(heading ?? (status === 404 ? 'Not found' : 'Something went wrong'))}</h1>
   <p>${esc(message)}</p>
   ${eventId ? `<p class="muted">Reference: <code>${esc(eventId)}</code></p>` : ''}
-  <p><a href="/browse/">Back to the file list</a></p>
+  ${back ? '<p><a href="/browse/">Back to the file list</a></p>' : ''}
+</div>`,
+  });
+}
+
+/** What someone opening a share link sees: the file, and a download button. */
+export function sharePage({ siteTitle, name, size, expires, downloadHref }) {
+  return layout({
+    title: `${name} · ${siteTitle}`,
+    siteTitle,
+    brandHref: '',
+    body: `<div class="card shared">
+  <span class="file-glyph" aria-hidden="true"></span>
+  <h1>${esc(name)}</h1>
+  <p class="muted">${esc(formatSize(size))} · link expires ${esc(expires)}</p>
+  <a class="button primary" href="${esc(downloadHref)}" download>Download</a>
 </div>`,
   });
 }

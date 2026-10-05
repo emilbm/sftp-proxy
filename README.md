@@ -21,6 +21,8 @@ you expose (for example through a Cloudflare tunnel).
   (Cloudflare's is 100 MB) don't apply, and a dropped connection resumes from
   the last chunk. A name that already exists gets a postfix, `photo (1).jpg`,
   and is never overwritten.
+- **Share links.** Anyone signed in can make a link to one file that works
+  without a password until it expires (30 days by default).
 - **A storage bar**, in the style of macOS's, shows what the share holds by kind
   of file, and how full the disk is.
 - **Nothing is stored.** Files stream straight from SFTP to the browser; the
@@ -120,6 +122,25 @@ thing between a stranger and your files. For a second lock, put a
 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
 application on `your.domain/admin` that only lets your own email through. Viewers
 are unaffected, and a leaked admin password alone is then useless.
+
+### Share links
+
+Every file has a link button. It makes a link like
+`https://files.example.com/s/…` that lets anyone download that one file,
+without a password, for 1, 7, 30 (the default), 90 or 365 days. Either
+password can make links. Opening one shows the file's name, size and expiry
+with a Download button, so chat apps previewing the link don't download the
+file. The download resumes like any other.
+
+Nothing is stored: the file path and expiry are sealed inside the link itself
+(AES-256-GCM), so a link can't be forged, lengthened or pointed at another
+file, and it doesn't reveal which folder the file is in. The trade-off is
+that one link can't be cancelled on its own. Changing `SESSION_SECRET`
+cancels **all** links at once (and signs everyone out). Deleting or renaming
+the file also stops its links working.
+
+Share links need `SESSION_SECRET`. Without it they are turned off, because
+every restart would break them.
 
 ### The storage bar
 

@@ -4,7 +4,8 @@ import { createLogger } from '../logger.js';
 import { COOKIE_NAME, parseCookies } from '../auth.js';
 import { cleanRelative } from '../paths.js';
 import { HttpError, STAGING_DIR } from '../sftp.js';
-import { loginPage, listingPage, errorPage } from './views.js';
+import { loginPage, listingPage, errorPage, sharePage } from './views.js';
+import { SHARE_DAYS, DEFAULT_SHARE_DAYS } from '../shares.js';
 import { createAdmin } from './admin.js';
 import { ASSETS } from './assets.js';
 
@@ -104,7 +105,7 @@ function relFromPath(pathname, prefix) {
  * The website: a login form, a folder listing and downloads, all streamed
  * straight from the SFTP server. Nothing is cached or written locally.
  */
-export function createWebServer({ cfg, store, auth, limiter, reporter }) {
+export function createWebServer({ cfg, store, auth, limiter, reporter, shares = null }) {
   const siteTitle = cfg.web.title;
   const dateFormat = new Intl.DateTimeFormat('en-GB', {
     timeZone: cfg.tz, dateStyle: 'medium', timeStyle: 'short',
@@ -248,15 +249,22 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
     return html(res, 200, listingPage({
       siteTitle, rel, entries, formatDate, storage,
       admin: session.role === 'admin',
-      csrf: session.role === 'admin' ? auth.csrfToken(session.token) : '',
+      csrf: auth.csrfToken(session.token),
+      sharing: Boolean(shares),
+      shareDays: SHARE_DAYS,
+      defaultShareDays: DEFAULT_SHARE_DAYS,
     }));
   }
 
   async function handleDownload(req, res, url) {
     const rel = relFromPath(url.pathname, '/download/');
     if (!rel || !allowed(rel)) throw new HttpError(404, 'That file does not exist');
-    const name = rel.split('/').pop();
+    return sendFile(req, res, rel, { via: 'site' });
+  }
 
+  /** Stream `rel` as an attachment, honouring Range for resumed downloads. */
+  async function sendFile(req, res, rel, { via }) {
+    const name = rel.split('/').pop();
     const file = await store.open(rel);
     const etag = `W/"${file.size.toString(16)}-${(file.mtime?.getTime() ?? 0).toString(16)}"`;
     const lastModified = file.mtime?.toUTCString();
@@ -299,7 +307,9 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
     }
 
     const started = Date.now();
-    log.info('download started', { file: rel, range: range ? `${range.start}-${range.end}` : 'all' });
+    log.info('download started', {
+      file: rel, via, range: range ? `${range.start}-${range.end}` : 'all', client: clientKey(req),
+    });
     await new Promise((resolve) => {
       const expected = range ? range.end - range.start + 1 : file.size;
       let sent = 0;
@@ -317,10 +327,101 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
           log.info('download cancelled', { file: rel });
         } else {
           log.error('download failed part-way', err);
-          reporter?.capture(err, { tags: { route: '/download' }, extra: { file: rel } });
+          reporter?.capture(err, { tags: { route: '/download', via }, extra: { file: rel } });
         }
         resolve();
       });
+    });
+  }
+
+  /**
+   * Requests that change something must come from one of our own pages: the
+   * page's token in a header, and no cross-site Origin.
+   */
+  function checkForgery(req, token) {
+    const origin = req.headers.origin;
+    if (origin && origin !== 'null') {
+      let host = '';
+      try { host = new URL(origin).host; } catch { /* stays empty */ }
+      if (host !== req.headers.host) throw new HttpError(403, 'Cross-site request refused');
+    }
+    if (!auth.checkCsrf(token, req.headers['x-csrf-token'])) {
+      throw new HttpError(403, 'Missing or stale page token - reload the page and try again');
+    }
+  }
+
+  async function readJson(req) {
+    const form = await new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on('data', (c) => {
+        size += c.length;
+        if (size > MAX_FORM_BYTES) {
+          reject(new HttpError(413, 'Request too large'));
+          req.destroy();
+          return;
+        }
+        chunks.push(c);
+      });
+      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      req.on('error', reject);
+    });
+    try {
+      return form ? JSON.parse(form) : {};
+    } catch {
+      throw new HttpError(400, 'Request body is not valid JSON');
+    }
+  }
+
+  /** POST /api/share {path, days} -> {url, expiresAt} */
+  async function handleCreateShare(req, res, session) {
+    if (!shares) throw new HttpError(404, 'Share links are turned off (set SESSION_SECRET to enable them)');
+    const body = await readJson(req);
+    const rel = relOrThrow(body.path);
+    if (!rel) throw new HttpError(400, 'Choose a file to share');
+    const days = body.days === undefined ? DEFAULT_SHARE_DAYS : Number(body.days);
+    if (!SHARE_DAYS.includes(days)) throw new HttpError(400, `Links can last ${SHARE_DAYS.join(', ')} days`);
+
+    // Only files can be shared, and only ones that exist right now.
+    const file = await store.open(rel);
+    file.release();
+
+    const expiresAt = Date.now() + days * 86_400_000;
+    const token = shares.create(rel, expiresAt);
+    log.info('share link created', { file: rel, days, role: session.role, client: clientKey(req) });
+    return json(res, 201, { url: `/s/${token}`, expiresAt: new Date(expiresAt).toISOString() });
+  }
+
+  /** GET /s/<token> (a page) and /s/<token>/download (the file), no sign-in. */
+  async function handleShareLink(req, res, url) {
+    const [, , token, action, extra] = url.pathname.split('/');
+    if (!shares || extra !== undefined || (action !== undefined && action !== 'download')) {
+      throw new HttpError(404, 'This link is not valid');
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Method not allowed');
+
+    const link = shares.open(token);
+    if (!link || !allowed(link.rel) || !link.rel) throw new HttpError(404, 'This link is not valid');
+    if (link.expired) {
+      throw new HttpError(410, `This link expired on ${formatDate(new Date(link.expiresAt))}`);
+    }
+
+    if (action === 'download') return sendFile(req, res, link.rel, { via: 'share' });
+
+    const file = await store.open(link.rel).catch((err) => {
+      if (err.status === 404) throw new HttpError(404, 'The shared file is no longer there');
+      throw err;
+    });
+    file.release();
+    return html(res, 200, sharePage({
+      siteTitle,
+      name: link.rel.split('/').pop(),
+      size: file.size,
+      expires: formatDate(new Date(link.expiresAt)),
+      downloadHref: `/s/${token}/download`,
+    }), {
+      // The page itself names the file; keep it out of referrers and indexes.
+      'X-Robots-Tag': 'noindex, nofollow',
     });
   }
 
@@ -350,6 +451,9 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
       return res.end();
     }
 
+    // Share links work without signing in; the link itself is the key.
+    if (pathname.startsWith('/s/')) return handleShareLink(req, res, url);
+
     const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
     const session = { token, role: auth.verify(token) };
     const signedIn = Boolean(session.role);
@@ -358,17 +462,7 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
       if (!auth.adminEnabled) throw new HttpError(404, 'There is nothing at this address');
       if (!signedIn) throw new HttpError(401, 'Sign in first');
       if (session.role !== 'admin') throw new HttpError(403, 'Only the admin password can change files');
-      // Belt and braces against another site driving an admin's browser: the
-      // token comes from the page, and a cross-site Origin is refused outright.
-      const origin = req.headers.origin;
-      if (origin && origin !== 'null') {
-        let host = '';
-        try { host = new URL(origin).host; } catch { /* stays empty */ }
-        if (host !== req.headers.host) throw new HttpError(403, 'Cross-site request refused');
-      }
-      if (!auth.checkCsrf(token, req.headers['x-csrf-token'])) {
-        throw new HttpError(403, 'Missing or stale page token - reload the page and try again');
-      }
+      checkForgery(req, token);
       return admin.route(req, res, url, (status, body) => json(res, status, body));
     }
 
@@ -387,6 +481,12 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
       if (method !== 'GET' && method !== 'HEAD') throw new HttpError(401, 'Sign in first');
       const next = pathname === '/' ? '' : `?next=${encodeURIComponent(pathname)}`;
       return redirect(res, `/login${next}`);
+    }
+
+    if (pathname === '/api/share') {
+      if (method !== 'POST') throw new HttpError(405, 'Method not allowed');
+      checkForgery(req, token);
+      return handleCreateShare(req, res, session);
     }
 
     if (method !== 'GET' && method !== 'HEAD') throw new HttpError(405, 'Method not allowed');
@@ -438,11 +538,17 @@ export function createWebServer({ cfg, store, auth, limiter, reporter }) {
       const message = status >= 500 && !(err instanceof HttpError)
         ? 'An unexpected error occurred. It has been logged.'
         : err.message;
-      if (url.pathname.startsWith('/admin/')) {
+      if (url.pathname.startsWith('/admin/') || url.pathname.startsWith('/api/')) {
         // Drain what is left of an upload so the browser reads our answer
         // instead of seeing the connection reset.
         if (!req.complete) req.resume();
         return json(res, status, { error: message, eventId, ...err.body });
+      }
+      if (url.pathname.startsWith('/s/')) {
+        // Whoever got a link has no file list to go back to.
+        const heading = status === 410 ? 'This link has expired'
+          : status === 404 ? 'This link does not work' : undefined;
+        return html(res, status, errorPage({ siteTitle, status, message, eventId, heading, back: false }));
       }
       const signedIn = Boolean(auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]));
       html(res, status, errorPage({ siteTitle, status, message, eventId, signedIn }));

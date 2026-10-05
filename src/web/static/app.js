@@ -1,10 +1,11 @@
-// Admin controls: upload, new folder, rename, delete. Only served to admin
-// sessions; every request carries the page's anti-forgery token, and the
+// Share links for everyone signed in; upload, new folder, rename and delete
+// for admins. Every request carries the page's anti-forgery token, and the
 // server checks the role again regardless of what this script does.
 (() => {
   const csrf = document.querySelector('meta[name="csrf"]')?.content;
   if (!csrf) return;
 
+  const isAdmin = document.body.hasAttribute('data-admin');
   const dir = document.body.dataset.dir ?? '';
   const CHUNK = 16 * 1024 * 1024;
   const MAX_RETRIES = 6;
@@ -24,6 +25,61 @@
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(data.error || `${res.status} ${res.statusText}`), { status: res.status, data });
     return data;
+  }
+
+  // ------------------------------------------------------------ sharing ---
+
+  const dialog = document.getElementById('share-dialog');
+  let sharing = null;
+
+  function openShare(tr) {
+    sharing = tr.dataset.path;
+    dialog.querySelector('#share-name').textContent = tr.dataset.name;
+    dialog.querySelector('#share-result').hidden = true;
+    dialog.querySelector('#share-error').hidden = true;
+    dialog.querySelector('#share-create').disabled = false;
+    dialog.showModal();
+  }
+
+  if (dialog) {
+    const result = dialog.querySelector('#share-result');
+    const urlField = dialog.querySelector('#share-url');
+    const error = dialog.querySelector('#share-error');
+    const create = dialog.querySelector('#share-create');
+    const copy = dialog.querySelector('#share-copy');
+
+    create.addEventListener('click', async () => {
+      create.disabled = true;
+      error.hidden = true;
+      try {
+        const days = Number(dialog.querySelector('#share-days').value);
+        const link = await api('POST', '/api/share', { path: sharing, days });
+        urlField.value = new URL(link.url, location.origin).href;
+        dialog.querySelector('#share-expiry').textContent =
+          `Expires ${new Date(link.expiresAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+        result.hidden = false;
+        copy.textContent = 'Copy';
+        urlField.select();
+      } catch (err) {
+        error.textContent = err.status === 403 && /token/.test(err.message)
+          ? 'Your session has expired. Reload the page and sign in again.'
+          : err.message;
+        error.hidden = false;
+      } finally {
+        create.disabled = false;
+      }
+    });
+
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(urlField.value);
+      } catch {
+        // Clipboard access needs https or localhost; fall back to selecting.
+        urlField.select();
+        document.execCommand?.('copy');
+      }
+      copy.textContent = 'Copied';
+    });
   }
 
   /** PUT one chunk, reporting bytes as they leave so the bar moves smoothly. */
@@ -137,33 +193,36 @@
     if (active) e.preventDefault();
   });
 
-  fileInput.addEventListener('change', () => {
-    uploadAll([...fileInput.files]);
-    fileInput.value = '';
-  });
+  // Upload by picker or by dropping files anywhere on the page (admins).
+  if (isAdmin) {
+    fileInput.addEventListener('change', () => {
+      uploadAll([...fileInput.files]);
+      fileInput.value = '';
+    });
 
-  // Drag and drop anywhere on the page.
-  let depth = 0;
-  const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
-  window.addEventListener('dragenter', (e) => {
-    if (!hasFiles(e)) return;
-    depth += 1;
-    overlay.hidden = false;
-  });
-  window.addEventListener('dragleave', () => {
-    depth = Math.max(0, depth - 1);
-    if (!depth) overlay.hidden = true;
-  });
-  window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
-  window.addEventListener('drop', (e) => {
-    if (!hasFiles(e)) return;
-    e.preventDefault();
-    depth = 0;
-    overlay.hidden = true;
-    // Folders dropped in show up as zero-byte entries with no type; skip them.
-    const files = [...e.dataTransfer.files].filter((f) => f.size > 0 || f.type);
-    uploadAll(files);
-  });
+    // Drag and drop anywhere on the page.
+    let depth = 0;
+    const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+    window.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e)) return;
+      depth += 1;
+      overlay.hidden = false;
+    });
+    window.addEventListener('dragleave', () => {
+      depth = Math.max(0, depth - 1);
+      if (!depth) overlay.hidden = true;
+    });
+    window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+    window.addEventListener('drop', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      overlay.hidden = true;
+      // Folders dropped in show up as zero-byte entries with no type; skip them.
+      const files = [...e.dataTransfer.files].filter((f) => f.size > 0 || f.type);
+      uploadAll(files);
+    });
+  }
 
   document.addEventListener('click', async (e) => {
     const button = e.target.closest('button[data-action]');
@@ -172,7 +231,11 @@
     const tr = button.closest('tr');
 
     try {
-      if (action === 'upload') {
+      if (action === 'share') {
+        openShare(tr);
+      } else if (!isAdmin) {
+        // Admin buttons are not rendered for viewers.
+      } else if (action === 'upload') {
         fileInput.click();
       } else if (action === 'mkdir') {
         const name = prompt('Name of the new folder:', 'New folder');

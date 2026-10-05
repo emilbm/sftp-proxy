@@ -269,3 +269,70 @@ td.actions, th.actions { text-align: right; white-space: nowrap; width: 1%; padd
   th, td { padding: 8px 8px; }
   main, .top { padding-left: 12px; padding-right: 12px; }
 }
+
+/* ------------------------------------------------------------ sharing --- */
+.icon-btn.share {
+  --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1'/%3E%3Cpath d='M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1'/%3E%3C/svg%3E");
+}
+
+button.primary, a.button.primary, button.secondary {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+button.primary, a.button.primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+a.button.primary:hover { text-decoration: none; filter: brightness(1.05); }
+button.secondary { border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+button.primary:disabled { opacity: .6; cursor: default; }
+@media (prefers-color-scheme: dark) { button.primary, a.button.primary { color: #0b1020; } }
+
+.dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+.dialog::backdrop { background: rgb(0 0 0 / .45); }
+.dialog-body { padding: 20px; }
+.dialog h2 { font-size: 18px; margin: 0 0 6px; }
+.dialog p { margin: 0 0 14px; }
+.dialog label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+#share-name { color: var(--text); overflow-wrap: anywhere; }
+.share-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.share-row select, .share-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.share-row input { font-size: 13px; }
+.share-row { flex-wrap: wrap; }
+.share-row select { flex: 1 1 6.5em; }
+.share-row input { flex: 1 1 12em; }
+.share-row button { flex: none; }
+.dialog-actions { display: flex; justify-content: flex-end; }
+#share-expiry { font-size: 13px; }
+
+.shared { max-width: 420px; margin: 10vh auto 0; padding: 28px 24px; text-align: center; }
+.shared h1 { overflow-wrap: anywhere; margin: 10px 0 6px; }
+.shared .muted { margin: 0 0 20px; }
+.shared .button { min-width: 160px; }
+.file-glyph {
+  display: inline-block;
+  width: 44px;
+  height: 44px;
+  background: var(--accent);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+}

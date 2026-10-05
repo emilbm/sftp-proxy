@@ -6,6 +6,7 @@ import { startSftpServer } from './sftp-server.js';
 import { createSftpStore } from '../../src/sftp.js';
 import { createAuth, createLoginLimiter } from '../../src/auth.js';
 import { createWebServer, listen } from '../../src/web/server.js';
+import { createShareLinks } from '../../src/shares.js';
 
 configureLogger({ level: 'error' });
 
@@ -16,7 +17,9 @@ configureLogger({ level: 'error' });
 export const PASSWORD = 'correct horse battery';
 export const ADMIN = 'the admin password, quite long';
 
-export async function setup(t, { web = {}, reporter, sftp = {}, auth = {} } = {}) {
+export async function setup(t, {
+  web = {}, reporter, sftp = {}, auth = {}, sharing = true, now,
+} = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sftp-proxy-web-'));
   fs.mkdirSync(path.join(dir, 'public', 'Photos 2026'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'public', 'hello.txt'), 'hello world');
@@ -46,6 +49,7 @@ export async function setup(t, { web = {}, reporter, sftp = {}, auth = {} } = {}
     auth: createAuth(cfg.auth),
     limiter: createLoginLimiter({ maxFailures: 3, windowMs: 60_000 }),
     reporter,
+    shares: sharing ? createShareLinks({ secret: cfg.auth.sessionSecret, ...(now ? { now } : {}) }) : null,
   });
   await listen(server, { port: 0, address: '127.0.0.1' });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -93,5 +97,19 @@ export async function setup(t, { web = {}, reporter, sftp = {}, auth = {} } = {}
     });
   };
 
-  return { base, req, login, authed, cookie, srv, dir, admin, asAdmin };
+  // A viewer creating a share link, with the token from their own page.
+  let viewerCsrf = null;
+  const share = async (body, headers = {}) => {
+    if (!viewerCsrf) {
+      const page = await (await authed('/browse/')).text();
+      viewerCsrf = /<meta name="csrf" content="([^"]+)">/.exec(page)?.[1];
+    }
+    return req('/api/share', {
+      method: 'POST',
+      headers: { cookie, 'X-CSRF-Token': viewerCsrf, 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+  };
+
+  return { base, req, login, authed, cookie, srv, dir, admin, asAdmin, share };
 }

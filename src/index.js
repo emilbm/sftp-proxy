@@ -3,6 +3,7 @@ import { configureLogger, createLogger } from './logger.js';
 import { createErrorReporter } from './sentry.js';
 import { createAuth, createLoginLimiter } from './auth.js';
 import { createSftpStore } from './sftp.js';
+import { createShareLinks } from './shares.js';
 import { createWebServer, listen } from './web/server.js';
 
 let cfg;
@@ -30,7 +31,10 @@ const limiter = createLoginLimiter({
   windowMs: cfg.auth.failureWindowMs,
 });
 const store = createSftpStore(cfg.sftp);
-const server = createWebServer({ cfg, store, auth, limiter, reporter });
+// Share links are sealed with a key from SESSION_SECRET. Without one, the key
+// would change on every restart and break every link, so sharing stays off.
+const shares = cfg.auth.sessionSecret ? createShareLinks({ secret: cfg.auth.sessionSecret }) : null;
+const server = createWebServer({ cfg, store, auth, limiter, reporter, shares });
 
 async function main() {
   log.info('sftp-proxy starting', {
@@ -38,6 +42,7 @@ async function main() {
     folder: cfg.sftp.root,
     hostKeyPinned: Boolean(cfg.sftp.hostKeySha256),
     admin: auth.adminEnabled ? 'enabled' : 'off (no ADMIN_PASSWORD)',
+    shareLinks: shares ? 'enabled' : 'off (no SESSION_SECRET)',
   });
   if (auth.ephemeralSecret) {
     log.info('no SESSION_SECRET set - visitors will need to sign in again after a restart');

@@ -82,7 +82,7 @@ test('without a secret, a random one is used and reported as such', () => {
   assert.equal(b.verify(a.issue('viewer').token), null);
 });
 
-test('the anti-forgery token is tied to an admin session', () => {
+test('the anti-forgery token is tied to its session', () => {
   const auth = createAuth({ ...base, now: () => 0 });
   const admin = auth.issue('admin').token;
   const other = createAuth({ ...base, now: () => 1 }).issue('admin').token;
@@ -94,8 +94,12 @@ test('the anti-forgery token is tied to an admin session', () => {
   assert.equal(auth.checkCsrf(other, csrf), false, 'not valid for another session');
   assert.equal(auth.checkCsrf(admin, ''), false);
   assert.equal(auth.checkCsrf(admin, undefined), false);
-  assert.equal(auth.csrfToken(viewer), '', 'viewers get none');
-  assert.equal(auth.checkCsrf(viewer, auth.csrfToken(viewer)), false);
+  // Viewers get one too (they create share links), but it is a different one.
+  const viewerCsrf = auth.csrfToken(viewer);
+  assert.ok(viewerCsrf);
+  assert.equal(auth.checkCsrf(viewer, viewerCsrf), true);
+  assert.equal(auth.checkCsrf(viewer, csrf), false);
+  assert.equal(auth.csrfToken('not a session'), '');
 });
 
 test('the limiter locks a client out after too many failures, then forgives', () => {

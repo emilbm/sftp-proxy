@@ -85,13 +85,14 @@ export function createAuth({
     verify,
 
     /**
-     * Anti-forgery token for admin requests, bound to the session cookie.
-     * Pages embed it; every /admin request must send it back in a header,
-     * which another site cannot do.
+     * Anti-forgery token, bound to the session cookie. Pages embed it; every
+     * request that changes something (admin actions, creating a share link)
+     * must send it back in a header, which another site cannot do.
      */
     csrfToken(sessionToken) {
-      if (verify(sessionToken) !== 'admin') return '';
-      return crypto.createHmac('sha256', roles.admin.key).update(`csrf\0${sessionToken}`).digest('base64url');
+      const role = verify(sessionToken);
+      if (!role) return '';
+      return crypto.createHmac('sha256', roles[role].key).update(`csrf\0${sessionToken}`).digest('base64url');
     },
 
     checkCsrf(sessionToken, given) {
